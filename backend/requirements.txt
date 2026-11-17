@@ -1,0 +1,15 @@
+Django==5.2.8
+djangorestframework==3.16.1
+djangorestframework-simplejwt==5.5.1
+django-cors-headers==4.9.0
+dj-database-url==3.0.1
+psycopg[binary]==3.2.10
+Pillow==12.0.0
+reportlab==4.4.4
+channels==4.3.1
+channels-redis==4.3.0
+daphne==4.2.1
+python-dotenv==1.2.1
+whitenoise==6.11.0
+gunicorn==23.0.0
+django-storages[s3]>=1.14,<2

@@ -1,0 +1,8 @@
+import axios from 'axios';
+export const api=axios.create({baseURL:import.meta.env.VITE_API_URL||'http://127.0.0.1:8000/api/'});
+api.interceptors.request.use(c=>{const t=localStorage.getItem('access');if(t)c.headers.Authorization=`Bearer ${t}`;return c;});
+let refreshing=null;
+api.interceptors.response.use(r=>r,async e=>{const req=e.config;if(e.response?.status===401&&!req._retry&&localStorage.getItem('refresh')){req._retry=true;refreshing ||= axios.post(`${api.defaults.baseURL}auth/token/refresh/`,{refresh:localStorage.getItem('refresh')}).then(r=>{localStorage.setItem('access',r.data.access);if(r.data.refresh)localStorage.setItem('refresh',r.data.refresh);return r.data.access;}).catch(()=>{localStorage.clear();location.reload();}).finally(()=>refreshing=null);const access=await refreshing;if(access){req.headers.Authorization=`Bearer ${access}`;return api(req);}}return Promise.reject(e);});
+export function mediaUrl(url){if(!url)return '';if(url.startsWith('http'))return url;const base=api.defaults.baseURL.replace(/\/api\/?$/,'');return `${base}${url}`;}
+export async function download(path,name){const r=await api.get(path,{responseType:'blob'});const url=URL.createObjectURL(r.data);const a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
+export async function fetchAll(path,params={}){let r=await api.get(path,{params:{...params,page:1,page_size:250}});let data=r.data;let all=[...(data.results||data)];let next=data.next;let pages=1;while(next&&pages<10){const n=await api.get(next);data=n.data;all.push(...(data.results||data));next=data.next;pages++;}return all;}
