@@ -1,5 +1,5 @@
 import axios from 'axios';
-export const api=axios.create({baseURL:import.meta.env.VITE_API_URL||'http://127.0.0.1:8000/api/'});
+export const api = axios.create({baseURL: import.meta.env.VITE_API_URL || 'https://al-fazal-school.onrender.com/api/'});
 api.interceptors.request.use(c=>{const t=localStorage.getItem('access');if(t)c.headers.Authorization=`Bearer ${t}`;return c;});
 let refreshing=null;
 api.interceptors.response.use(r=>r,async e=>{const req=e.config;if(e.response?.status===401&&!req._retry&&localStorage.getItem('refresh')){req._retry=true;refreshing ||= axios.post(`${api.defaults.baseURL}auth/token/refresh/`,{refresh:localStorage.getItem('refresh')}).then(r=>{localStorage.setItem('access',r.data.access);if(r.data.refresh)localStorage.setItem('refresh',r.data.refresh);return r.data.access;}).catch(()=>{localStorage.clear();location.reload();}).finally(()=>refreshing=null);const access=await refreshing;if(access){req.headers.Authorization=`Bearer ${access}`;return api(req);}}return Promise.reject(e);});
