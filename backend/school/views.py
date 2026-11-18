@@ -60,7 +60,9 @@ class TeacherViewSet(viewsets.ModelViewSet):
 class StudentViewSet(ScopedViewSet):
     serializer_class=StudentSerializer
     def get_queryset(self):
-        qs=Student.objects.select_related('classroom').filter(is_active=True)
+        include_inactive=self.request.query_params.get('include_inactive')=='true' and self.is_principal()
+        qs=Student.objects.select_related('classroom')
+        if not include_inactive: qs=qs.filter(is_active=True)
         qs=self.restrict_classrooms(qs)
         class_id=self.request.query_params.get('classroom')
         if class_id: qs=qs.filter(classroom_id=class_id)
@@ -79,6 +81,48 @@ class StudentViewSet(ScopedViewSet):
         student=self.get_object()
         if not self.is_principal(): raise PermissionDenied('Only the principal can delete a student.')
         student.is_active=False; student.save(update_fields=['is_active']); return Response(status=status.HTTP_204_NO_CONTENT)
+    @action(detail=True,methods=['post'])
+    def mark_leaving(self,request,pk=None):
+        if not self.is_principal(): raise PermissionDenied('Only the principal can record a student leaving.')
+        student=self.get_object()
+        leaving_status=request.data.get('enrollment_status','left')
+        allowed={Student.EnrollmentStatus.LEFT,Student.EnrollmentStatus.TRANSFERRED,Student.EnrollmentStatus.GRADUATED}
+        if leaving_status not in allowed: raise ValidationError({'enrollment_status':'Choose left, transferred, or graduated.'})
+        leaving_date=request.data.get('leaving_date')
+        if not leaving_date: raise ValidationError({'leaving_date':'A leaving date is required.'})
+        from django.utils.dateparse import parse_date
+        parsed_date=parse_date(str(leaving_date))
+        if not parsed_date: raise ValidationError({'leaving_date':'Use YYYY-MM-DD.'})
+        student.enrollment_status=leaving_status
+        student.leaving_date=parsed_date
+        student.leaving_reason=str(request.data.get('leaving_reason','')).strip()[:255]
+        student.certificate_no=student.certificate_no or f'AF-{timezone.localdate():%Y}-SLC-{uuid.uuid4().hex[:8].upper()}'
+        student.is_active=False
+        student.save(update_fields=['enrollment_status','leaving_date','leaving_reason','certificate_no','is_active'])
+        return Response(self.get_serializer(student).data)
+    @action(detail=True,methods=['get'])
+    def leaving_certificate(self,request,pk=None):
+        if not self.is_principal(): raise PermissionDenied('Only the principal can issue a leaving certificate.')
+        student=self.get_object()
+        if student.enrollment_status==Student.EnrollmentStatus.ACTIVE or not student.certificate_no:
+            return Response({'detail':'Record the student leaving before issuing a certificate.'},status=400)
+        buf=BytesIO(); pdf=canvas.Canvas(buf,pagesize=A4); pdf.setTitle('School Leaving Certificate')
+        pdf.setFont('Helvetica-Bold',18); pdf.drawCentredString(297,790,'Al-Fazal Higher Secondary School')
+        pdf.setFont('Helvetica',10); pdf.drawCentredString(297,772,'G.M Abad, Faisalabad')
+        pdf.line(55,754,540,754); pdf.setFont('Helvetica-Bold',16); pdf.drawCentredString(297,720,'SCHOOL LEAVING CERTIFICATE')
+        pdf.setFont('Helvetica',10); pdf.drawRightString(535,690,f'Certificate No: {student.certificate_no}')
+        lines=[('This is to certify that', ''),('Student name',student.full_name),('Father name',student.father_name),('Admission number',student.admission_no),('Class / roll number',f'{student.classroom.name} / {student.roll_no}'),('Date of admission',str(student.admission_date)),('Date of leaving',str(student.leaving_date)),('Status',student.get_enrollment_status_display()),('Reason',student.leaving_reason or 'Not specified')]
+        y=650
+        for label,value in lines:
+            pdf.setFont('Helvetica-Bold' if value else 'Helvetica-Oblique',11)
+            pdf.drawString(70,y,label if not value else f'{label}:')
+            if value:
+                pdf.setFont('Helvetica',11); pdf.drawString(220,y,str(value)[:55])
+            y-=30
+        pdf.setFont('Helvetica',10); pdf.drawString(70,350,'The student named above has been relieved from the school records.')
+        pdf.line(370,205,520,205); pdf.setFont('Helvetica',10); pdf.drawCentredString(445,188,'Principal signature and stamp')
+        pdf.showPage(); pdf.save(); buf.seek(0)
+        return FileResponse(buf,as_attachment=True,filename=f'leaving-certificate-{student.admission_no}.pdf',content_type='application/pdf')
     @action(detail=True,methods=['get'])
     def profile(self,request,pk=None):
         s=self.get_object(); today=timezone.localdate(); fees=FeeRecord.objects.filter(student=s,month__gte=today.replace(day=1).replace(year=today.year-1)).order_by('-month')
@@ -264,43 +308,66 @@ def dashboard(request):
 def pdf_report(request,kind):
     user=request.user
     if kind not in ('fees','quiz','class'): return Response({'detail':'Unknown report.'},status=404)
-    buf=BytesIO(); p=canvas.Canvas(buf,pagesize=A4); p.setTitle('School report')
+    today=timezone.localdate()
+    requested_date=request.query_params.get('date')
+    report_date=today
+    if requested_date:
+        from django.utils.dateparse import parse_date
+        report_date=parse_date(requested_date)
+        if not report_date: return Response({'detail':'Use date format YYYY-MM-DD.'},status=400)
+    requested_class=request.query_params.get('classroom')
+    classrooms=ClassRoom.objects.all() if user.is_principal else ClassRoom.objects.filter(incharge=user)
+    if requested_class:
+        classrooms=classrooms.filter(pk=requested_class)
+        if not classrooms.exists(): raise PermissionDenied('You can only download reports for your assigned class.')
+    buf=BytesIO(); p=canvas.Canvas(buf,pagesize=A4); p.setTitle(f'{kind.title()} report')
     p.setFont('Helvetica-Bold',16);p.drawCentredString(297,800,'Al-Fazal Higher Secondary School')
-    p.setFont('Helvetica',10);p.drawCentredString(297,782,'G.M Abad, Faisalabad');p.setFont('Helvetica-Bold',13);p.drawString(48,746,f'{kind.title()} Report — {timezone.localdate():%B %Y}')
+    p.setFont('Helvetica',10);p.drawCentredString(297,782,'G.M Abad, Faisalabad');p.setFont('Helvetica-Bold',13);p.drawString(48,746,f'{kind.title()} Report - {report_date:%d %B %Y}')
     y=714
+    def next_page(title):
+        nonlocal y
+        p.showPage(); y=800; p.setFont('Helvetica-Bold',12); p.drawString(48,y,f'Al-Fazal Higher Secondary School - {title} (continued)'); y-=28
     if kind=='fees':
         qs=FeeRecord.objects.select_related('student','student__classroom')
         if not user.is_principal: qs=qs.filter(student__classroom__incharge=user)
-        qs=qs.filter(month=timezone.localdate().replace(day=1)).order_by('student__classroom__name','student__roll_no')
+        qs=qs.filter(month=report_date.replace(day=1),student__classroom__in=classrooms).order_by('student__classroom__name','student__roll_no')
         paid=qs.filter(status='paid').aggregate(total=Sum('amount'),count=Count('id'))
         pending=qs.exclude(status='paid').aggregate(total=Sum('amount'),count=Count('id'))
         p.setFont('Helvetica-Bold',10);p.drawString(48,y,f'Paid: {paid["count"]} records / PKR {paid["total"] or 0}    Pending or late: {pending["count"]} records / PKR {pending["total"] or 0}');y-=25
         for f in qs:
             p.setFont('Helvetica',9);p.drawString(48,y,f'{f.student.classroom.name} | {f.student.full_name[:24]} | {f.effective_status.title()} | PKR {f.amount}');y-=13
-            if y<45:
-                p.showPage(); y=800
-                p.setFont('Helvetica-Bold',12);p.drawString(48,y,'Al-Fazal Higher Secondary School — Fee Report (continued)');y-=28
+            if y<45: next_page('Fee Report')
     elif kind=='quiz':
-        today=timezone.localdate(); first=today.replace(day=1)
-        classrooms=ClassRoom.objects.all() if user.is_principal else ClassRoom.objects.filter(incharge=user)
-        for classroom in classrooms:
-            scores=list(QuizResult.objects.filter(quiz__classroom=classroom,quiz__quiz_date__year=today.year,quiz__quiz_date__month=today.month).values('student__full_name').annotate(average=Avg(ExpressionWrapper(F('marks')*100.0/F('quiz__max_marks'),output_field=FloatField()))).order_by('-average','student__full_name'))
-            if not scores: continue
-            average=sum(float(row['average']) for row in scores)/len(scores);top=scores[0];low=scores[-1]
-            p.setFont('Helvetica-Bold',10);p.drawString(48,y,f'{classroom.name}: class average {average:.1f}% · {len(scores)} students · {len(Quiz.objects.filter(classroom=classroom,quiz_date__year=today.year,quiz_date__month=today.month))} quizzes');y-=16
-            p.setFont('Helvetica',9);p.drawString(62,y,f'Topper: {top["student__full_name"]} ({top["average"]:.1f}%)   Lowest: {low["student__full_name"]} ({low["average"]:.1f}%)');y-=20
-            if y<45:
-                p.showPage(); y=800
-                p.setFont('Helvetica-Bold',12);p.drawString(48,y,'Al-Fazal Higher Secondary School — Quiz Report (continued)');y-=28
+        quiz_id=request.query_params.get('quiz_id')
+        if quiz_id:
+            selected_quiz=Quiz.objects.filter(pk=quiz_id,classroom__in=classrooms).select_related('classroom').first()
+            if not selected_quiz: raise PermissionDenied('You can only download reports for quizzes in your assigned class.')
+            report_date=selected_quiz.quiz_date
+            quizzes=Quiz.objects.filter(pk=selected_quiz.pk)
+        else:
+            quizzes=Quiz.objects.filter(classroom__in=classrooms,quiz_date__year=report_date.year,quiz_date__month=report_date.month).select_related('classroom').prefetch_related('results__student').order_by('classroom__name','quiz_date','title')
+        if not quizzes.exists(): p.setFont('Helvetica',10);p.drawString(48,y,'No quizzes were recorded for this month.')
+        for quiz in quizzes:
+            p.setFont('Helvetica-Bold',11);p.drawString(48,y,f'{quiz.classroom.name} - {quiz.title[:35]} ({quiz.subject or "General"})');y-=16
+            p.setFont('Helvetica',9);p.drawString(58,y,f'Date: {quiz.quiz_date:%d %b %Y} | Maximum marks: {quiz.max_marks}');y-=15
+            p.setFont('Helvetica-Bold',9);p.drawString(58,y,'Roll');p.drawString(100,y,'Student');p.drawRightString(470,y,'Marks');p.drawRightString(535,y,'Percent');y-=13
+            results={r.student_id:r for r in quiz.results.all()}
+            for student in quiz.classroom.students.filter(is_active=True).order_by('roll_no'):
+                result=results.get(student.pk); marks=f'{result.marks:g}' if result else 'Not entered'; percent=f'{result.percentage:.1f}%' if result else '-'
+                p.setFont('Helvetica',9);p.drawString(58,y,str(student.roll_no)[:10]);p.drawString(100,y,student.full_name[:42]);p.drawRightString(470,y,marks);p.drawRightString(535,y,percent);y-=13
+                if y<50: next_page('Quiz Report')
+            y-=15
+            if y<50: next_page('Quiz Report')
     else:
-        for c in ClassRoom.objects.all() if user.is_principal else ClassRoom.objects.filter(incharge=user):
-            qs=c.students.filter(is_active=True); present=Attendance.objects.filter(student__in=qs,date=timezone.localdate(),status='present').count(); pending=FeeRecord.objects.filter(student__in=qs,month=timezone.localdate().replace(day=1)).exclude(status='paid').count()
-            p.setFont('Helvetica',10);p.drawString(48,y,f'{c.name}: {qs.count()} students | Present today {present} | Fee pending {pending}');y-=18
-            if y<45:
-                p.showPage(); y=800
-                p.setFont('Helvetica-Bold',12);p.drawString(48,y,'Al-Fazal Higher Secondary School — Class Report (continued)');y-=28
+        p.setFont('Helvetica-Bold',9);p.drawString(48,y,'Class');p.drawString(100,y,'Roll');p.drawString(145,y,'Student');p.drawString(470,y,'Attendance');y-=16
+        for c in classrooms:
+            attendance={row.student_id:row.status for row in Attendance.objects.filter(student__classroom=c,date=report_date).only('student_id','status')}
+            for student in c.students.filter(is_active=True).order_by('roll_no'):
+                p.setFont('Helvetica',9);p.drawString(48,y,c.name[:12]);p.drawString(100,y,str(student.roll_no)[:12]);p.drawString(145,y,student.full_name[:45]);p.drawString(470,y,attendance.get(student.pk,'Not marked').title());y-=14
+                if y<45: next_page('Attendance Report')
+        if not classrooms.exists(): p.setFont('Helvetica',10);p.drawString(48,y,'No assigned class was found for this account.')
     p.showPage();p.save();buf.seek(0)
-    return FileResponse(buf,as_attachment=True,filename=f'{kind}-report-{timezone.localdate():%Y-%m}.pdf',content_type='application/pdf')
+    return FileResponse(buf,as_attachment=True,filename=f'{kind}-report-{report_date:%Y-%m-%d}.pdf',content_type='application/pdf')
 
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):

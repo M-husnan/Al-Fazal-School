@@ -33,6 +33,8 @@ class ClassRoom(models.Model):
 
 class Student(models.Model):
     class Gender(models.TextChoices): MALE='male','Male'; FEMALE='female','Female'; OTHER='other','Other'
+    class EnrollmentStatus(models.TextChoices):
+        ACTIVE='active','Active'; LEFT='left','Left school'; TRANSFERRED='transferred','Transferred'; GRADUATED='graduated','Graduated'
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     admission_no = models.CharField(max_length=40, unique=True)
     full_name = models.CharField(max_length=160)
@@ -48,6 +50,10 @@ class Student(models.Model):
     guardian_phone = models.CharField(max_length=30, blank=True)
     previous_school = models.CharField(max_length=180, blank=True)
     is_active = models.BooleanField(default=True)
+    enrollment_status = models.CharField(max_length=16, choices=EnrollmentStatus.choices, default=EnrollmentStatus.ACTIVE)
+    leaving_date = models.DateField(null=True, blank=True)
+    leaving_reason = models.CharField(max_length=255, blank=True)
+    certificate_no = models.CharField(max_length=40, unique=True, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         ordering = ['classroom__name','roll_no']

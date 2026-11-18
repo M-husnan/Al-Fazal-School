@@ -24,6 +24,7 @@ class StudentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Student
         fields = '__all__'
+        read_only_fields = ['enrollment_status','leaving_date','leaving_reason','certificate_no']
 class FeeRecordSerializer(serializers.ModelSerializer):
     student_name=serializers.CharField(source='student.full_name', read_only=True)
     admission_no=serializers.CharField(source='student.admission_no', read_only=True)

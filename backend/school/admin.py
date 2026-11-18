@@ -12,7 +12,7 @@ class UserAdmin(BaseUserAdmin):
     search_fields=('username','first_name','last_name','email','phone')
 
 class StudentInline(admin.TabularInline):
-    model=Student; extra=0; fields=('roll_no','admission_no','full_name','father_name','is_active'); show_change_link=True
+    model=Student; extra=0; fields=('roll_no','admission_no','full_name','father_name','enrollment_status','is_active'); show_change_link=True
 @admin.register(ClassRoom)
 class ClassRoomAdmin(admin.ModelAdmin):
     list_display=('name','grade','section','incharge','monthly_fee','is_active')
@@ -21,10 +21,10 @@ class ClassRoomAdmin(admin.ModelAdmin):
     inlines=[StudentInline]
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
-    list_display=('admission_no','full_name','father_name','classroom','roll_no','phone','is_active')
-    list_filter=('classroom','gender','is_active')
+    list_display=('admission_no','full_name','father_name','classroom','roll_no','enrollment_status','leaving_date','is_active')
+    list_filter=('classroom','gender','enrollment_status','is_active')
     search_fields=('admission_no','full_name','father_name','roll_no','phone','guardian_phone')
-    readonly_fields=('id','created_at')
+    readonly_fields=('id','created_at','certificate_no')
     list_per_page=50
 
 @admin.action(description='Mark selected fee records as paid')
