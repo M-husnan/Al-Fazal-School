@@ -15,8 +15,15 @@ class ClassRoomSerializer(serializers.ModelSerializer):
     student_count=serializers.IntegerField(read_only=True)
     class Meta: model=ClassRoom; fields='__all__'
 class StudentSerializer(serializers.ModelSerializer):
-    classroom_name=serializers.CharField(source='classroom.name', read_only=True)
-    class Meta: model=Student; fields='__all__'
+    picture = serializers.ImageField(required=False, allow_null=True)
+    classroom_name = serializers.CharField(
+        source='classroom.name',
+        read_only=True
+    )
+
+    class Meta:
+        model = Student
+        fields = '__all__'
 class FeeRecordSerializer(serializers.ModelSerializer):
     student_name=serializers.CharField(source='student.full_name', read_only=True)
     admission_no=serializers.CharField(source='student.admission_no', read_only=True)
