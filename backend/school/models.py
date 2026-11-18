@@ -4,6 +4,7 @@ from django.contrib.auth.models import AbstractUser
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.db.models import Q
+from cloudinary.models import CloudinaryField
 from django.utils import timezone
 
 class User(AbstractUser):
@@ -36,7 +37,7 @@ class Student(models.Model):
     admission_no = models.CharField(max_length=40, unique=True)
     full_name = models.CharField(max_length=160)
     father_name = models.CharField(max_length=160)
-    picture = models.ImageField(upload_to='students/%Y/%m/', blank=True, null=True)
+    picture = CloudinaryField('image', blank=True, null=True, folder='students')
     date_of_birth = models.DateField(null=True, blank=True)
     gender = models.CharField(max_length=8, choices=Gender.choices, blank=True)
     classroom = models.ForeignKey(ClassRoom, on_delete=models.PROTECT, related_name='students')
@@ -146,3 +147,7 @@ class UserNotification(models.Model):
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta: ordering = ['-created_at']
+
+
+
+
